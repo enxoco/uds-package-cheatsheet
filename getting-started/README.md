@@ -9,6 +9,28 @@ $ uds deploy k3d-core-slim-dev:latest
 
 This command will bootstrap a k3d cluster for you and install only basic components such as Keycloak, Istio and Pepr. [source](https://github.com/defenseunicorns/uds-core/tree/main/bundles/k3d-slim-dev)
 
+### Local Networking & Traffic Flow
+When you hit `https://sso.uds.dev` in a browser, the request travels through several layers:
+
+1. **DNS** — `*.uds.dev` is a real public wildcard DNS record that resolves to `127.0.0.1`. No `/etc/hosts` edits needed.
+2. **Host ports 80/443** — k3d maps these into the cluster via Docker. The Docker daemon (`dockerd`) binds the ports as root on your behalf; you never need `sudo` yourself.
+3. **NGINX (inside k3d)** — receives the traffic and uses ACL rules to forward it to the correct [MetalLB](https://metallb.universe.tf/) load balancer IP.
+4. **MetalLB** — provides a stable in-cluster IP for each Istio Gateway service.
+5. **Istio Gateways** — terminate TLS (using bundled `*.uds.dev` wildcard certs) and route to the appropriate service via VirtualService rules.
+
+Three gateways handle different domains:
+- `*.uds.dev` — tenant gateway (user-facing apps, e.g. `sso.uds.dev`)
+- `keycloak.uds.dev` — also tenant gateway
+- `*.admin.uds.dev` — admin gateway (operator/admin UIs)
+
+> **Port binding & Docker daemon privileges**
+> Ports 80 and 443 are bound by the Docker daemon, not by `k3d` or your shell directly. The daemon gains the necessary privilege to bind these ports when it is installed/configured — for example, Colima requires `sudo` during setup for exactly this reason. Once that is in place, day-to-day `k3d` usage needs no elevated permissions.
+>
+> If cluster creation succeeds but you can't reach `*.uds.dev` in a browser, check:
+> - The Docker daemon is running: `docker info`
+> - On Linux, your user is in the `docker` group: `groups $USER`. If not: `sudo usermod -aG docker $USER`, then log out and back in.
+> - Nothing else is already bound to port 80 or 443: `sudo lsof -i :80 -i :443`
+
 ### SSO Integration
 UDS Core comes with Keycloak integration out of the box.
 
@@ -17,18 +39,14 @@ UDS Core comes with Keycloak integration out of the box.
 #### Keycloak admin user/password
 A quick way to get the initial admin password from the secret: (adding ; echo to the end of the command ensures that the shell will print a new line, otherwise you may see a rogue % on the end of the string.). The default username is admin, however you can check that by extracting the username from the same secret.
 
+
 ```shell
-$ kubectl get secret -n keycloak keycloak-admin-password -o jsonpath='{.data.password}' | base64 -d; echo
+uds zarf tools kubectl get secret -n keycloak keycloak-admin-password -o jsonpath='{.data.password}' | base64 -d; echo
 
 <your-admin-password>
 ```
 
-You can also use the kubectl tool built in like this:
-```shell
-uds zarf tools kubectl get secret -n keycloak keycloak-admin-password -o jsonpath='{.data.password}' | base64 -d; echo
-```
-
-** Alternate ** At the time of this edit you can also simply run `setup:print-keycloak-admin-password` like so:
+**Alternate** At the time of this edit you can also simply run `setup:print-keycloak-admin-password` like so:
 ```shell
 $ uds run setup:print-keycloak-admin-password
      !!! Please ensure you're not running this in CI !!!                                                                                                                                                                               
