@@ -28,9 +28,10 @@ flowchart TD
     end
 
     subgraph ZARF["Zarf layer"]
-        ZY["zarf.yaml\nDeclares variables\nand dependencies"]
+        CZ["common/zarf.yaml\nBase component definition\nshared across all flavors"]
+        ZY["zarf.yaml\nVariables, flavors,\nimports common/"]
         VY["values/values.yaml\nWires zarf variables\ninto helm via ###VAR###"]
-        ZV["Zarf variables\nDefined in zarf.yaml"]
+        ZV["Zarf variables\nDeclared in root zarf.yaml"]
     end
 
     subgraph HELM["Helm layer"]
@@ -43,13 +44,12 @@ flowchart TD
 
     UB -->|references| ZY
     UC -->|overrides| ZV
-    UC -.->|can set| VY
+    CZ -->|imported by| ZY
+    ZY -->|declares| ZV
     ZY -->|deploys| HC
     ZY -->|feeds into| VY
-    ZV -.->|templates| HV
+    VY -->|overrides| HV
     HC --> HT
-    HT --> HV
-    HC --> CLUSTER
     HT --> CLUSTER
     HV --> CLUSTER
 ```
@@ -72,6 +72,94 @@ uds-config.yaml  →  zarf variable default  →  values/values.yaml  →  chart
 ```
 
 > **Note:** `uds-config.yaml` always wins. It is the last word on any variable's value at deploy time.
+
+---
+
+## How `common/zarf.yaml` and root `zarf.yaml` relate
+
+`common/zarf.yaml` is the **base component definition** for the package. It defines the shared helm chart configuration, manifests, and component structure that is consistent across all deployment flavors (e.g. `upstream`, `registry1`).
+
+The root `zarf.yaml` **imports** `common/` and layers on top of it — adding variables, selecting which flavor to build, and specifying the flavor-specific images and `valuesFiles`.
+
+```
+common/zarf.yaml          root zarf.yaml
+─────────────────         ──────────────────────────────────────
+Shared chart config   ←── import: path: common
+Shared manifests          variables: (DOMAIN, etc.)
+Base component            flavor-specific images
+                          flavor-specific valuesFiles
+```
+
+Example using a generic `my-app` package with two flavors (`upstream` and `registry1`):
+
+```yaml
+# common/zarf.yaml — shared base component
+# Defines the chart, manifests, and UDS package CR that every flavor uses.
+# No variables here — those live in root zarf.yaml.
+kind: ZarfPackageConfig
+metadata:
+  name: my-app
+
+components:
+  - name: my-app
+    required: true
+    charts:
+      - name: my-app
+        version: 1.2.3
+        namespace: my-app
+        localPath: chart/
+    manifests:
+      - name: uds-package
+        files:
+          - manifests/uds-package.yaml  # UDS Package CR for the operator
+```
+
+```yaml
+# zarf.yaml (root) — imports common/, adds variables and flavor-specific config
+kind: ZarfPackageConfig
+metadata:
+  name: my-app
+  version: "1.2.3-uds.0"
+
+variables:
+  - name: DOMAIN
+    default: "uds.dev"
+  - name: DB_HOST
+    default: "localhost"
+
+components:
+  # upstream flavor — uses public images
+  - name: my-app
+    import:
+      path: common              # pulls in the base component from common/zarf.yaml
+    only:
+      flavor: upstream          # only included when building the upstream flavor
+    charts:
+      - name: my-app
+        valuesFiles:
+          - values/values.yaml          # shared zarf variable wiring
+          - values/upstream-values.yaml # upstream-specific image/tag overrides
+    images:
+      - docker.io/myorg/my-app:1.2.3
+
+  # registry1 flavor — uses hardened images from Iron Bank
+  - name: my-app
+    import:
+      path: common              # same base, different flavor
+    only:
+      flavor: registry1
+    charts:
+      - name: my-app
+        valuesFiles:
+          - values/values.yaml           # shared zarf variable wiring
+          - values/registry1-values.yaml # registry1-specific image/tag overrides
+    images:
+      - registry1.dso.mil/ironbank/myorg/my-app:1.2.3
+```
+
+> **Note:** The `import: path: common` directive merges the base component from `common/zarf.yaml` into the flavor-specific component in root `zarf.yaml`. The root component's `charts`, `images`, and other keys are **merged on top** — they don't replace the base, they extend it.
+
+> **Tip:** `variables` are **only declared in root `zarf.yaml`**, never in `common/zarf.yaml`. The common file defines structure; the root file defines what's configurable. `values/values.yaml` files that use `###ZARF_VAR_###` tokens are referenced from the root `zarf.yaml` component, not from `common/`.
 
 ---
 
@@ -250,7 +338,9 @@ containers:
 
 | I want to… | Edit this file | Using this syntax |
 |---|---|---|
-| Add a new configurable value | `zarf.yaml` | `variables: - name: FOO` |
+| Define shared chart/component structure | `common/zarf.yaml` | standard `components:` block, no variables |
+| Add a new configurable value | `zarf.yaml` (root) | `variables: - name: FOO` |
+| Add a flavor-specific image or values file | `zarf.yaml` (root) | `import: path: common` + `images:` / `valuesFiles:` |
 | Pass a zarf var into helm | `values/values.yaml` | `key: "###ZARF_VAR_FOO###"` |
 | Expose a variable for deploy-time override | `uds-bundle.yaml` | `variables: - name: FOO path: "..."` |
 | Set a static helm value (fixed at bundle creation) | `uds-bundle.yaml` | `values: - path: "image.tag" value: "v2"` |
