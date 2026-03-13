@@ -1,0 +1,16 @@
+kind: ZarfPackageConfig
+metadata:
+  name: debug-tools
+  version: 0.0.1
+  description: Debug tools pod for cluster troubleshooting
+
+components:
+  - name: debug-tools
+    required: true
+    images:
+      - debug-tools:latest
+    manifests:
+      - name: debug-pod
+        namespace: debug-tools
+        files:
+          - manifests/debug-pod.yaml
