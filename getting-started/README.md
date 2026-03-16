@@ -32,73 +32,56 @@ Three gateways handle different domains:
 > - Nothing else is already bound to port 80 or 443: `sudo lsof -i :80 -i :443`
 
 ### SSO Integration
-UDS Core comes with Keycloak integration out of the box.
+UDS Core comes with Keycloak integration out of the box. On a fresh deployment, the Keycloak admin user and its credentials secret are not created automatically — you need to bootstrap them first.
 
-> **DNS & TLS tip:** `uds.dev` and all its subdomains (`sso.uds.dev`, `keycloak.admin.uds.dev`, etc.) are real public DNS records that resolve to `127.0.0.1`. UDS Core also bundles wildcard TLS certificates for `*.uds.dev`, so local k3d clusters work over HTTPS with valid certs out of the box — no `/etc/hosts` editing, no local DNS setup, and no cert warnings.  On a brand new deployment you will first need/want to create a user before signing into any services.  The operator will create an initial Keycloak admin user for you and store the credentials in a secret named `keycloak-admin-password` which resides in the keycloak namespace.  
+#### Bootstrap Keycloak
 
-#### Keycloak admin user/password
-A quick way to get the initial admin password from the secret: (adding ; echo to the end of the command ensures that the shell will print a new line, otherwise you may see a rogue % on the end of the string.). The default username is admin, however you can check that by extracting the username from the same secret.
-
-
-```shell
-uds zarf tools kubectl get secret -n keycloak keycloak-admin-password -o jsonpath='{.data.password}' | base64 -d; echo
-
-<your-admin-password>
-```
-
-**Alternate** At the time of this edit you can also simply run `setup:print-keycloak-admin-password` like so:
-```shell
-$ uds run setup:print-keycloak-admin-password
-     !!! Please ensure you're not running this in CI !!!                                                                                                                                                                               
-     Keycloak Admin Username:  admin
-     Keycloak Admin Password:  <your-admin-password>                                                                                                                                                                                        
-  ✔  Completed "Print the default keycloak admin password to standard out (if available)"
-```
-
-#### Creating a test user
-If you need a user to test applications with, there is a task to boostrap the creation of a `doug@uds.dev` user.
+Run the setup task, which creates the Keycloak admin user, stores its credentials in a secret, and creates a `doug@uds.dev` test user:
 
 ```shell
 $ uds run setup:keycloak-user --set KEYCLOAK_USER_GROUP="/UDS Core/Admin"
 ```
-The command will create a user with the following credentials that can then be used to login to `https://sso.uds.dev`
-```
-username: doug@uds.dev
-password: unicorn123!@#UN
-```
-[docs source](https://uds.defenseunicorns.com/tutorials/deploy-uds-on-rke2/#configuring-keycloak-sso)
 
-Note: This command assumes that you have a `tasks.yaml` file in your working directory.  This file should be included by default with all UDS packages but if you don't have one, this is what it should look like:
-
-```yaml
-# Copyright 2024 Defense Unicorns
-# SPDX-License-Identifier: AGPL-3.0-or-later OR LicenseRef-Defense-Unicorns-Commercial
-# yaml-language-server: $schema=https://raw.githubusercontent.com/defenseunicorns/uds-cli/refs/heads/main/tasks.schema.json
-includes:
-  - test: ./tasks/test.yaml
-  - create: https://raw.githubusercontent.com/defenseunicorns/uds-common/v1.24.1/tasks/create.yaml
-  - lint: https://raw.githubusercontent.com/defenseunicorns/uds-common/v1.24.1/tasks/lint.yaml
-  - pull: https://raw.githubusercontent.com/defenseunicorns/uds-common/v1.24.1/tasks/pull.yaml
-  - deploy: https://raw.githubusercontent.com/defenseunicorns/uds-common/v1.24.1/tasks/deploy.yaml
-  - setup: https://raw.githubusercontent.com/defenseunicorns/uds-common/v1.24.1/tasks/setup.yaml
-  ###Truncated
-```
-
-  You can view the [tasks/setup.yaml](https://raw.githubusercontent.com/defenseunicorns/uds-common/v1.24.1/tasks/setup.yaml) file to see exactly what it is doing and view other convience wrappers.  
-
-
-  With that user created, you should now be able to login to `https://sso.uds.dev` with that information.  If you need to login to the admin side of keycloak you will need to visit [https://keycloak.admin.uds.dev](https://keycloak.admin.uds.dev)
-
-  ** Note ** To see a list of services that are available externally you can run:
-  ```shell
-    $ uds zarf tools kubectl get vs -A
-NAMESPACE     NAME                                                                  GATEWAYS                                  HOSTS                        AGE
-keycloak      keycloak-admin-admin-access-with-optional-client-certificate          ["istio-admin-gateway/admin-gateway"]     ["keycloak.admin.uds.dev"]   22h
-keycloak      keycloak-tenant-public-auth-access-with-optional-client-certificate   ["istio-tenant-gateway/tenant-gateway"]   ["sso.uds.dev"]              22h
-keycloak      keycloak-tenant-remove-private-paths-from-public-gateway              ["istio-tenant-gateway/tenant-gateway"]   ["sso.uds.dev"]              22h
+This creates:
+- A Keycloak admin user (credentials stored in the `keycloak-admin-password` secret in the `keycloak` namespace)
+- A test SSO user you can use to log into apps:
+  ```
+  username: doug@uds.dev
+  password: unicorn123!@#UN
   ```
 
-  or alternatively `k get vs -A` (vs short for virtualservices)
+[docs source](https://uds.defenseunicorns.com/tutorials/deploy-uds-on-rke2/#configuring-keycloak-sso)
+
+#### Getting the Keycloak admin password
+
+After running the bootstrap task above, retrieve the admin credentials:
+
+```shell
+$ uds run setup:print-keycloak-admin-password
+     Keycloak Admin Username:  admin
+     Keycloak Admin Password:  <your-admin-password>
+```
+
+Or read the secret directly (the `; echo` ensures a trailing newline in your terminal):
+
+```shell
+uds zarf tools kubectl get secret -n keycloak keycloak-admin-password -o jsonpath='{.data.password}' | base64 -d; echo
+```
+
+> **Note:** `uds run setup:keycloak-user` requires a `tasks.yaml` in your working directory. All UDS packages include one by default. If you're working outside a package repo, the minimal `tasks.yaml` needs to include the `setup` remote tasks:
+> ```yaml
+> includes:
+>   - setup: https://raw.githubusercontent.com/defenseunicorns/uds-common/v1.24.1/tasks/setup.yaml
+> ```
+> See [uds-common/tasks/setup.yaml](https://raw.githubusercontent.com/defenseunicorns/uds-common/v1.24.1/tasks/setup.yaml) for the full source.
+
+With the test user created you can log in at `https://sso.uds.dev`. For the Keycloak admin console, visit `https://keycloak.admin.uds.dev`.
+
+To see all externally exposed services:
+
+```shell
+kubectl get vs -A
+```
 
 ### Quick port forwards
 If you need to access a service via port-forward, zarf offers `zarf connect list` which will list the services that are available as well as the commands to connect.  For example:
