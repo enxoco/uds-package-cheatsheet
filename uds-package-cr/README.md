@@ -253,13 +253,110 @@ With this CR applied:
 
 ---
 
-## Quick reference
+## Troubleshooting
 
-| Task | Command |
-|------|---------|
-| List all Package CRs | `kubectl get packages -A` |
-| Describe a Package CR | `kubectl describe package <name> -n <namespace>` |
-| Watch Package CR reconciliation | `kubectl get package <name> -n <namespace> -w` |
-| List VirtualServices created by UDS | `kubectl get vs -A` |
-| List NetworkPolicies created by UDS | `kubectl get netpol -A` |
-| Check SSO client secret | `kubectl get secret sso-client-<clientId> -n <namespace> -o jsonpath='{.data.clientSecret}' \| base64 -d` |
+### Check Package CR status
+
+The quickest way to see whether the operator finished reconciling and whether anything failed:
+
+```shell
+kubectl describe package <name> -n <namespace>
+```
+
+Look at the `Status.Conditions` block. A healthy Package shows `Ready: True`. If reconciliation failed, the `Reason` and `Message` fields say why.
+
+Watch reconciliation in real time:
+
+```shell
+kubectl get package <name> -n <namespace> -w
+```
+
+---
+
+### Verify generated resources
+
+When the operator reconciles a Package CR it creates several resources. If something isn't working, confirm each was actually created.
+
+**NetworkPolicies** — one per `allow` rule, plus ingress for each `expose` entry:
+
+```shell
+kubectl get netpol -n <namespace>
+kubectl describe netpol -n <namespace>
+```
+
+**VirtualServices** — one per `expose` entry:
+
+```shell
+kubectl get vs -n <namespace>
+kubectl describe vs -n <namespace>
+```
+
+**AuthorizationPolicies** — Istio-level access control, created alongside NetworkPolicies:
+
+```shell
+kubectl get authorizationpolicies -n <namespace>
+kubectl describe authorizationpolicies -n <namespace>
+```
+
+If any of these are missing after a successful reconcile, the operator likely didn't see the CR. See the namespace labeling issue below.
+
+---
+
+### Common issues
+
+#### Package CR is ignored — namespace missing Pepr labels
+
+UDS Core (Pepr) only manages namespaces that carry specific labels. Namespaces created via a Zarf component get these labels automatically through Pepr's namespace mutation webhook. If you deploy into an existing namespace (e.g. `default`) or one created manually, those labels will be absent and the Package CR will never be reconciled — no NetworkPolicies, VirtualServices, or SSO clients will be created.
+
+Check what labels are present:
+
+```shell
+kubectl get namespace <namespace> --show-labels
+```
+
+The safest fix is to let Zarf create and own the namespace by declaring it in the component's `namespace:` field. This ensures the mutation webhook runs and the labels are applied.
+
+Confirm the Pepr watcher saw the CR at all:
+
+```shell
+kubectl logs -n pepr-system -l app=pepr-uds-core-watcher --tail=100
+```
+
+---
+
+#### App returns 503 after adding an `expose` entry
+
+A 503 usually means the VirtualService was created but traffic can't reach the pod. Check in order:
+
+1. **`targetPort` matches the container port** — `targetPort` in the `expose` entry must match what the container listens on, not the Service port
+2. **NetworkPolicy allows the ingress** — `kubectl get netpol -n <namespace>` should show an ingress policy for the pod selector
+3. **Service is selecting pods** — `kubectl get endpoints <service> -n <namespace>` should list pod IPs; an empty endpoints list means the Service selector doesn't match the pods
+
+---
+
+#### App can't reach an external service (silent failures / timeouts)
+
+All egress is blocked by default. Missing `allow` rules cause connections to time out with no error in the app logs.
+
+To unblock everything temporarily for debugging:
+
+```yaml
+allow:
+  - direction: Egress
+    selector:
+      app: my-app
+    remoteGenerated: Anywhere
+    description: "Debug: allow all egress"
+```
+
+Then tighten to specific `remoteNamespace`/`remoteSelector` pairs once you know exactly what's needed.
+
+---
+
+#### authservice redirect loop or 401 after login
+
+If `enableAuthserviceSelector` is set but users loop at the login page or get a 401 after authenticating:
+
+1. **Selector mismatch** — the label in `enableAuthserviceSelector` must exactly match the pod labels. Check with `kubectl get pods -n <namespace> --show-labels`.
+2. **Redirect URI mismatch** — the `redirectUris` in the `sso` entry must match what Keycloak registered for the client. Verify in the Keycloak admin console at `https://keycloak.admin.uds.dev`.
+3. **SSO secret missing** — if the app also reads OIDC credentials directly, confirm the secret exists: `kubectl get secret -n <namespace>`.

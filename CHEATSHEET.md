@@ -51,11 +51,15 @@ Single-page command reference. See each section's `README.md` for full explanati
 
 | Task | Command |
 |------|---------|
-| List all UDS Package CRs | `kubectl get packages -A` |
-| Describe a UDS Package CR | `kubectl describe package <name> -n <namespace>` |
-| Watch Package CR status | `kubectl get package <name> -n <namespace> -w` |
-| List Istio VirtualServices (exposed routes) | `kubectl get vs -A` |
-| List NetworkPolicies managed by UDS | `kubectl get netpol -A` |
+| List all Package CRs | `kubectl get packages -A` |
+| Describe a Package CR (check status/conditions) | `kubectl describe package <name> -n <namespace>` |
+| Watch Package CR reconciliation | `kubectl get package <name> -n <namespace> -w` |
+| List VirtualServices (one per `expose` entry) | `kubectl get vs -n <namespace>` |
+| List NetworkPolicies (one per `allow` rule) | `kubectl get netpol -n <namespace>` |
+| List AuthorizationPolicies (Istio-level access control) | `kubectl get authorizationpolicies -n <namespace>` |
+| Check namespace labels (Pepr management) | `kubectl get namespace <namespace> --show-labels` |
+| Check SSO client secret | `kubectl get secret -n <namespace> -o jsonpath='{.data.clientSecret}' <secret-name> \| base64 -d` |
+| Check Service endpoints (is the selector matching pods?) | `kubectl get endpoints <service> -n <namespace>` |
 
 ---
 
